@@ -89,21 +89,26 @@ struct Member {
     Visibility visibility = Visibility::None;
     bool isStatic = false;
     bool isAbstract = false;
-    bool isConstructor = false; // NEU
+    bool isConstructor = false;
     std::string type;
     std::string name;
     bool isMethod = false;
     
-    std::string toPlantUML() const {
+    // NEU: Nimmt das Theme-Flag entgegen
+    std::string toPlantUML(bool useClassic) const {
         std::stringstream ss;
         ss << "  ";
         
         if (isStatic) ss << "{static} ";
-        if (isAbstract) ss << "{abstract} ";
+        
+        if (isAbstract) {
+            ss << "{abstract} ";
+            // Schreibt <<abstract>> nur im Classic-Theme explizit aus
+            if (useClassic) ss << "<<abstract>> "; 
+        }
         
         ss << visToString(visibility);
         
-        // NEU: Logik für die PlantUML-Ausgabe
         if (isConstructor) {
             ss << "<<create>> " << name << "()";
         } else {
@@ -118,27 +123,38 @@ struct Entity {
     bool isInterface = false;
     bool isAbstract = false;
     std::string name;
-    std::vector<std::string> parents; // Alles hinter dem ':'
+    std::vector<std::string> parents;
     std::vector<Member> members;
     std::vector<Relation> relations;
 
-    std::string toPlantUML() const {
+    // NEU: Nimmt das Theme-Flag entgegen
+    std::string toPlantUML(bool useClassic) const {
         std::stringstream ss;
-        ss << (isInterface ? "interface " : (isAbstract ? "abstract class " : "class ")) << name << " {\n";
+        std::string entityType = "class ";
+        
+        if (isInterface) entityType = "interface ";
+        else if (isAbstract) entityType = "abstract class ";
+        
+        ss << entityType << name;
+        
+        // Schreibt <<abstract>> für Klassen nur im Classic-Theme aus
+        if (isAbstract && !isInterface && useClassic) {
+            ss << " <<abstract>>";
+        }
+        ss << " {\n";
+        
         for (const auto& m : members) {
-            ss << m.toPlantUML() << "\n";
+            // Flag an die Felder/Methoden durchreichen
+            ss << m.toPlantUML(useClassic) << "\n";
         }
         ss << "}\n\n";
 
-        // Vererbungen definieren
         for (const auto& parent : parents) {
-            // In einer perfekten Welt müssten wir wissen, ob parent ein Interface oder eine Klasse ist.
-            // Für den UML-Drafting-Zweck nutzen wir meist <|-- (Klassenvererbung) oder <|.. (Interface)
-            // PlantUML ist klug genug, wenn wir <|-- als Standard nehmen und der Typ als Interface deklariert wurde.
             ss << parent << " <|-- " << name << "\n";
         }
 
         for (const auto& rel : relations) {
+            // Relationen benötigen das Flag aktuell nicht
             ss << rel.toPlantUML(name) << "\n";
         }
 
@@ -149,13 +165,24 @@ struct Entity {
 // Die Wurzel unseres Baumes (Das gesamte Dokument)
 struct Program {
     std::vector<Entity> entities;
+    bool useClassicTheme = false;
 
     std::string generatePlantUML() const {
         std::stringstream ss;
         ss << "@startuml\n";
-        for (const auto& entity : entities) {
-            ss << entity.toPlantUML();
+        
+        if (useClassicTheme) {
+            ss << "skinparam classAttributeIconSize 0\n";
+            ss << "hide circle\n";
+            ss << "skinparam monochrome true\n";
+            ss << "skinparam shadowing false\n";
         }
+
+        for (const auto& entity : entities) {
+            // NEU: Das Flag wird hier an die Klassen übergeben
+            ss << entity.toPlantUML(useClassicTheme);
+        }
+        
         ss << "@enduml\n";
         return ss.str();
     }
@@ -502,18 +529,29 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-    // 1. Überprüfung der Argumente (1 oder 2 Parameter erlaubt)
-    if (argc < 2 || argc > 3) {
+    bool useClassicTheme = false;
+    std::vector<std::string> paths;
+
+    // 1. Argumente intelligent parsen (Flags herausfiltern)
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--classic") {
+            useClassicTheme = true;
+        } else {
+            paths.push_back(arg); // Alles ohne '--' werten wir als Pfad
+        }
+    }
+
+    // 2. Überprüfung der übrig gebliebenen Pfad-Argumente
+    if (paths.empty() || paths.size() > 2) {
         std::cerr << "Fehler: Ungültige Anzahl an Argumenten.\n";
-        std::cerr << "Verwendung: " << argv[0] << " <eingabe_datei.dsl> [ausgabe_verzeichnis]\n";
-        std::cerr << "Beispiel:   " << argv[0] << " src/diagram.dsl ./pdfs/\n";
+        std::cerr << "Verwendung: " << argv[0] << " [--classic] <eingabe_datei.dsl> [ausgabe_verzeichnis]\n";
+        std::cerr << "Beispiel:   " << argv[0] << " --classic src/diagram.dsl ./pdfs/\n";
         return EXIT_FAILURE; 
     }
 
-    fs::path inputFilePath = argv[1];
-    
-    // 2. Ausgabeverzeichnis bestimmen (Standard: aktuelles Verzeichnis '.')
-    fs::path outputDir = (argc == 3) ? fs::path(argv[2]) : fs::current_path();
+    fs::path inputFilePath = paths[0];
+    fs::path outputDir = (paths.size() == 2) ? fs::path(paths[1]) : fs::current_path();
 
     try {
         // Erstelle das Ausgabeverzeichnis, falls es noch nicht existiert
@@ -529,6 +567,8 @@ int main(int argc, char* argv[]) {
 
         Parser parser(tokens);
         Program ast = parser.parse();
+
+        ast.useClassicTheme = useClassicTheme;
 
         std::string plantUmlCode = ast.generatePlantUML();
 
