@@ -56,6 +56,7 @@ struct Relation {
     std::string targetClass;
     std::string sourceMultiplicity; // NEU
     std::string targetMultiplicity; // Umbenannt von 'multiplicity'
+    std::string label;
 
     std::string toPlantUML(const std::string& sourceClass) const {
         std::stringstream ss;
@@ -80,8 +81,18 @@ struct Relation {
         }
         
         ss << " " << targetClass;
+
+        if (!label.empty()) {
+            ss << " : " << label;
+        }
+
         return ss.str();
     }
+};
+
+struct Parameter {
+    std::string type;
+    std::string name;
 };
 
 // Repräsentiert ein Feld ODER eine Methode
@@ -93,6 +104,8 @@ struct Member {
     std::string type;
     std::string name;
     bool isMethod = false;
+
+    std::vector<Parameter> parameters;
     
     // NEU: Nimmt das Theme-Flag entgegen
     std::string toPlantUML(bool useClassic) const {
@@ -109,10 +122,17 @@ struct Member {
         
         ss << visToString(visibility);
         
+        std::string paramStr = "";
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            paramStr += parameters[i].name + ": " + parameters[i].type;
+            if (i < parameters.size() - 1) paramStr += ", ";
+        }
+        
+        // Die finale Ausgabe formatieren
         if (isConstructor) {
-            ss << "<<create>> " << name << "()";
+            ss << "<<create>> " << name << "(" << paramStr << ")";
         } else {
-            ss << name << (isMethod ? "()" : "") << ": " << type;
+            ss << name << (isMethod ? "(" + paramStr + ")" : "") << ": " << type;
         }
         return ss.str();
     }
@@ -245,6 +265,19 @@ private:
         return typeName;
     }
 
+    void parseParameters(Member& member) {
+        // Wenn nicht sofort eine ')' kommt, gibt es mindestens einen Parameter
+        if (!check(TokenType::CloseParen)) {
+            do {
+                Parameter param;
+                // Da wir parseType() nutzen, funktionieren hier auch Generics wie List<Konto>!
+                param.type = parseType(); 
+                param.name = std::string(consume(TokenType::Identifier, "Erwarteter Parametername").text);
+                member.parameters.push_back(param);
+            } while (match(TokenType::Comma)); // Wiederholen, solange ein Komma folgt
+        }
+        consume(TokenType::CloseParen, "Erwartete schließende Klammer ')'");
+    }
 
     Member parseMember() {
         Member member;
@@ -272,9 +305,7 @@ private:
             member.isMethod = true;
             member.isConstructor = true;
 
-            // Parameter bis zur schließenden Klammer überspringen (für diesen Draft)
-            while (!check(TokenType::CloseParen) && !isAtEnd()) { cursor++; }
-            consume(TokenType::CloseParen, "Erwartete schließende Klammer ')' beim Konstruktor");
+            parseParameters(member);
         } 
         else {
             // Kein Konstruktor. firstPart war also der Rückgabetyp. 
@@ -285,8 +316,8 @@ private:
             // Ist es eine Methode?
             if (match(TokenType::OpenParen)) {
                 member.isMethod = true;
-                while (!check(TokenType::CloseParen) && !isAtEnd()) { cursor++; }
-                consume(TokenType::CloseParen, "Erwartete schließende Klammer ')' bei der Methode");
+                
+                parseParameters(member);
             }
         }
 
@@ -349,6 +380,10 @@ private:
                     if (match(TokenType::OpenBracket)) {
                         rel.targetMultiplicity = std::string(consume(TokenType::StringLiteral, "Erwartete Target-Multiplizität (z.B. \"*\")").text);
                         consume(TokenType::CloseBracket, "Erwartete schließende Klammer ']'");
+                    }
+
+                    if (check(TokenType::StringLiteral)) {
+                        rel.label = std::string(consume(TokenType::StringLiteral, "Erwartetes Label").text);
                     }
                     
                     entity.relations.push_back(rel);
